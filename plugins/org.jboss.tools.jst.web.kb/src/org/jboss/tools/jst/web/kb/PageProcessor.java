@@ -13,10 +13,15 @@ package org.jboss.tools.jst.web.kb;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.StringTokenizer;
 
+import org.eclipse.wst.server.core.IServer;
+import org.eclipse.wst.xml.ui.internal.editor.XMLEditorPluginImageHelper;
+import org.eclipse.wst.xml.ui.internal.editor.XMLEditorPluginImages;
 import org.jboss.tools.common.el.core.model.ELInstance;
 import org.jboss.tools.common.el.core.model.ELModel;
 import org.jboss.tools.common.el.core.model.ELUtil;
@@ -36,6 +41,10 @@ import org.jboss.tools.jst.web.kb.taglib.ICustomTagLibrary;
 import org.jboss.tools.jst.web.kb.taglib.IFacesConfigTagLibrary;
 import org.jboss.tools.jst.web.kb.taglib.ITagLibRecognizer;
 import org.jboss.tools.jst.web.kb.taglib.ITagLibrary;
+import org.jboss.tools.livereload.core.internal.angularjs.ContentAssistWebSocket;
+import org.jboss.tools.livereload.core.internal.server.jetty.LiveReloadServer;
+import org.jboss.tools.livereload.core.internal.server.wst.LiveReloadServerBehaviour;
+import org.jboss.tools.livereload.core.internal.util.WSTUtils;
 
 /**
  * @author Alexey Kazakov
@@ -118,6 +127,52 @@ public class PageProcessor {
 	 */
 	public TextProposal[] getProposals(KbQuery query, ELContext context, boolean preferCustomComponentExtensions) {
 		List<TextProposal> proposals = new ArrayList<TextProposal>();
+
+String qValue = query.getValue();
+int startEl = qValue.indexOf("{{");
+if(startEl>-1) {
+	String newValue = qValue.substring(startEl + 2);
+	IServer server = WSTUtils.findLiveReloadServer();
+	if(server!=null) {
+		LiveReloadServerBehaviour b = (LiveReloadServerBehaviour)WSTUtils.findServerBehaviour(server);
+		LiveReloadServer lrServer = b.getLiveReloadServer();
+        StringBuffer command = new StringBuffer("ORG_JBOSS_TOOLS_JST.getProposals('");
+        String[] tags = query.getParentTags();
+        for (String tag : tags) {
+			command.append(tag).append('>');
+		}
+        command.deleteCharAt(command.length()-1).append("', '").append(newValue).append("')");
+System.out.println("Command: " + command.toString());
+		Iterator<ContentAssistWebSocket> webSocketsIterator = lrServer.webSockets.iterator();
+		if (webSocketsIterator.hasNext()) {
+			ContentAssistWebSocket webSocket = webSocketsIterator.next(); // use only the first one
+			try {
+				long start = System.nanoTime();
+				String result = webSocket.evaluate(command.toString(), 100);
+				long stop = System.nanoTime();
+System.out.format("%s [computed in %.3fms]%n", result, (stop - start) / 1e6);
+				StringTokenizer st = new StringTokenizer(result, ", ", false);
+				int dotIndex = newValue.indexOf('.');
+				StringBuilder prefix = new StringBuilder(qValue.substring(0, startEl+2));
+				if(dotIndex>-1) {
+					prefix.append(qValue.substring(startEl+2, startEl+dotIndex+3));
+				}
+				while(st.hasMoreElements()) {
+					String label = st.nextToken().trim();
+					TextProposal proposal = new TextProposal();
+					proposal.setLabel(label);
+					proposal.setReplacementString(prefix.toString() + label + "}}");
+					proposal.setImageDescriptor(WebKbPlugin.getImageDescriptor(WebKbPlugin.class, "EnumerationProposal.gif"));
+					proposals.add(proposal);
+				}
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+		} else {
+			System.out.println("No clients connected.");
+		}
+	}
+}
 
 		if (!isQueryForELProposals(query, context)) {
 			if(context instanceof IPageContext) {
