@@ -392,4 +392,18 @@
     </propertyTester>
  </extension>
  
+    <extension
+         point="org.eclipse.ui.views">
+      <category
+            id="org.jboss.tools.jst.web.kb"
+            name="JBoss Tools KB">
+      </category>
+      <view
+            category="org.jboss.tools.jst.web.kb"
+            class="org.jboss.tools.jst.web.kb.CABrowserView"
+            id="org.jboss.tools.jst.web.kb.views.CABrowser"
+            name="KB Browser">
+      </view>
+   </extension>
+ 
 </plugin>

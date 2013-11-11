@@ -10,6 +10,7 @@
  ******************************************************************************/ 
 package org.jboss.tools.jst.web.kb;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -18,10 +19,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.StringTokenizer;
+import java.util.concurrent.CopyOnWriteArraySet;
 
-import org.eclipse.wst.server.core.IServer;
-import org.eclipse.wst.xml.ui.internal.editor.XMLEditorPluginImageHelper;
-import org.eclipse.wst.xml.ui.internal.editor.XMLEditorPluginImages;
+import org.eclipse.jetty.server.Server;
+import org.eclipse.jetty.server.handler.HandlerCollection;
+import org.eclipse.jetty.server.nio.SelectChannelConnector;
+import org.eclipse.jetty.servlet.FilterHolder;
+import org.eclipse.jetty.servlet.ServletContextHandler;
+import org.eclipse.jetty.servlet.ServletHolder;
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.browser.Browser;
+import org.eclipse.swt.widgets.Composite;
+import org.eclipse.ui.texteditor.ITextEditor;
+import org.eclipse.wst.sse.ui.StructuredTextEditor;
 import org.jboss.tools.common.el.core.model.ELInstance;
 import org.jboss.tools.common.el.core.model.ELModel;
 import org.jboss.tools.common.el.core.model.ELUtil;
@@ -30,6 +40,7 @@ import org.jboss.tools.common.el.core.parser.ELParserUtil;
 import org.jboss.tools.common.el.core.resolver.ELContext;
 import org.jboss.tools.common.el.core.resolver.ELResolver;
 import org.jboss.tools.common.text.TextProposal;
+import org.jboss.tools.common.util.EclipseUIUtil;
 import org.jboss.tools.jst.web.kb.internal.XmlContextImpl;
 import org.jboss.tools.jst.web.kb.internal.taglib.CustomTagLibAttribute;
 import org.jboss.tools.jst.web.kb.taglib.CustomTagLibManager;
@@ -41,10 +52,14 @@ import org.jboss.tools.jst.web.kb.taglib.ICustomTagLibrary;
 import org.jboss.tools.jst.web.kb.taglib.IFacesConfigTagLibrary;
 import org.jboss.tools.jst.web.kb.taglib.ITagLibRecognizer;
 import org.jboss.tools.jst.web.kb.taglib.ITagLibrary;
+import org.jboss.tools.livereload.core.internal.angularjs.ContentAssistServlet;
 import org.jboss.tools.livereload.core.internal.angularjs.ContentAssistWebSocket;
+import org.jboss.tools.livereload.core.internal.server.jetty.JettyServerRunner;
+import org.jboss.tools.livereload.core.internal.server.jetty.LiveReloadScriptFileServlet;
+import org.jboss.tools.livereload.core.internal.server.jetty.LiveReloadScriptInjectionFilter;
 import org.jboss.tools.livereload.core.internal.server.jetty.LiveReloadServer;
-import org.jboss.tools.livereload.core.internal.server.wst.LiveReloadServerBehaviour;
-import org.jboss.tools.livereload.core.internal.util.WSTUtils;
+import org.jboss.tools.livereload.core.internal.server.jetty.LiveReloadWebSocketServlet;
+import org.jboss.tools.livereload.core.internal.server.jetty.WorkspaceFileServlet;
 
 /**
  * @author Alexey Kazakov
@@ -119,6 +134,141 @@ public class PageProcessor {
 		return proposals;
 	}
 
+	Browser browser;
+	Set<ContentAssistWebSocket> webSockets;
+//    static boolean set;
+
+	private List<TextProposal> getJSProposals(KbQuery query) throws Exception {
+		List<TextProposal> proposals = new ArrayList<TextProposal>();
+		String qValue = query.getValue();
+		int startEl = qValue.indexOf("{{");
+		if(startEl>-1) {
+
+			// SWT Browser
+			if(browser==null) {
+				//	JSPMultiPageEditor editor = (JSPMultiPageEditor)EclipseUIUtil.getActiveEditor();
+				ITextEditor editor = EclipseUIUtil.getActiveEditor();
+				try {
+					Method m = editor.getClass().getMethod("getSourceEditor", null);
+					StructuredTextEditor edt = (StructuredTextEditor)m.invoke(editor, null);
+					Composite composite = (Composite)edt.getTextViewer().getControl();
+
+					Composite browserPanel = new Composite(composite, SWT.NONE);
+					browserPanel.setVisible(false);
+					browserPanel.setSize(0, 0);
+					browser = new Browser(browserPanel, SWT.NONE | SWT.WEBKIT);
+					browser.setUrl("http://localhost:35729/browser.cli/web/todoExample/index.html");
+				} catch (Exception e) {
+					e.printStackTrace();
+				}
+			}
+//			Browser browser = null;
+//			IViewPart part = WebKbPlugin.getDefault().getWorkbench().getActiveWorkbenchWindow().getActivePage().findView(CABrowserView.ID);
+//			if(part!=null) {
+//				browser = ((CABrowserView)part).getBrowser();
+//			}
+//			if(browser!=null) {
+//				if(!set) {
+//					browser.setUrl("http://localhost:35729/browser.cli/web/todoExample/index.html");
+//				}
+//				set = true;
+//				browser.refresh();
+//			}
+
+			// Livereload
+			String newValue = qValue.substring(startEl + 2);
+//			IServer server = WSTUtils.findLiveReloadServer();
+//			if(server!=null) {
+//				LiveReloadServerBehaviour b = (LiveReloadServerBehaviour)WSTUtils.findServerBehaviour(server);
+//				LiveReloadServer lrServer = b.getLiveReloadServer();
+		        final StringBuffer command = new StringBuffer("ORG_JBOSS_TOOLS_JST.getProposals('");
+		        String[] tags = query.getParentTags();
+		        for (String tag : tags) {
+					command.append(tag).append('>');
+				}
+		        command.deleteCharAt(command.length()-1).append("', '").append(newValue).append("')");
+		System.out.println("Command: " + command.toString());
+//				Iterator<ContentAssistWebSocket> webSocketsIterator = lrServer.webSockets.iterator();
+				if(webSockets==null) {
+					webSockets = startServer();
+				}
+				Iterator<ContentAssistWebSocket> webSocketsIterator = webSockets.iterator();
+				if (webSocketsIterator.hasNext()) {
+					final ContentAssistWebSocket webSocket = webSocketsIterator.next(); // use only the first one
+					try {
+						long start = System.nanoTime();
+//						Run task = new Run(webSocket, command.toString());
+//						Display.getDefault().syncExec(task);
+		//
+//						String result = task.getResult();
+						String result = webSocket.evaluate(command.toString(), 100);
+						long stop = System.nanoTime();
+		System.out.format("%s [computed in %.3fms]%n", result, (stop - start) / 1e6);
+						if(result == null) {
+							result = "";
+						}
+						StringTokenizer st = new StringTokenizer(result, ", ", false);
+						int dotIndex = newValue.indexOf('.');
+						StringBuilder prefix = new StringBuilder(qValue.substring(0, startEl+2));
+						if(dotIndex>-1) {
+							prefix.append(qValue.substring(startEl+2, startEl+dotIndex+3));
+						}
+						while(st.hasMoreElements()) {
+							String label = st.nextToken().trim();
+							TextProposal proposal = new TextProposal();
+							proposal.setLabel(label);
+							proposal.setReplacementString(prefix.toString() + label + "}}");
+							proposal.setImageDescriptor(WebKbPlugin.getImageDescriptor(WebKbPlugin.class, "EnumerationProposal.gif"));
+							proposals.add(proposal);
+						}
+					} catch (Exception e) {
+						e.printStackTrace();
+					}
+				} else {
+					System.out.println("No clients connected.");
+				}
+//			}
+		}
+		return proposals;
+	}
+
+	private Set<ContentAssistWebSocket> startServer() throws Exception {
+
+		LiveReloadServer liveReloadServer = new LiveReloadServer("liveroload-ca-server", "localhost", 35729, true, true, true);
+		JettyServerRunner liveReloadServerRunnable = JettyServerRunner.start(liveReloadServer);
+
+//		Server server = new Server();
+//
+//		SelectChannelConnector websocketConnector = new SelectChannelConnector();
+//		websocketConnector.setHost("localhost");
+//		websocketConnector.setStatsOn(true);
+//		websocketConnector.setPort(35729);
+//		websocketConnector.setMaxIdleTime(0);
+//		server.addConnector(websocketConnector);
+//
+//		final HandlerCollection handlers = new HandlerCollection();
+//		server.setHandler(handlers);
+//		final ServletContextHandler context = new ServletContextHandler(handlers, "/", ServletContextHandler.NO_SESSIONS);
+//		context.setConnectorNames(new String[] { websocketConnector.getName() });
+//		ServletHolder liveReloadServletHolder = new ServletHolder(new LiveReloadWebSocketServlet());
+//		// Fix for BrowserSim (Safari) due to check in WebSocketFactory
+//		liveReloadServletHolder.setInitParameter("minVersion", "-1");
+//		context.addServlet(liveReloadServletHolder, "/livereload");
+//
+//		ServletHolder servletHolder = new ServletHolder(new ContentAssistServlet());
+//		context.addServlet(servletHolder, "/cli");
+//		Set<ContentAssistWebSocket> webSockets = new CopyOnWriteArraySet<ContentAssistWebSocket>();
+//		context.getServletContext().setAttribute("org.jboss.tools.jst.ContentAssistWebSockets", webSockets);
+//		
+//		context.addServlet(new ServletHolder(new LiveReloadScriptFileServlet()), "/livereload.js");
+//		context.addServlet(new ServletHolder(new WorkspaceFileServlet()), "/*");
+//		context.addFilter(new FilterHolder(new LiveReloadScriptInjectionFilter(35729)), "/*", null);
+//
+//        server.start();
+
+        return liveReloadServer.webSockets;
+	}
+
 	/**
 	 * 
 	 * @param query
@@ -127,51 +277,10 @@ public class PageProcessor {
 	 */
 	public TextProposal[] getProposals(KbQuery query, ELContext context, boolean preferCustomComponentExtensions) {
 		List<TextProposal> proposals = new ArrayList<TextProposal>();
-
-String qValue = query.getValue();
-int startEl = qValue.indexOf("{{");
-if(startEl>-1) {
-	String newValue = qValue.substring(startEl + 2);
-	IServer server = WSTUtils.findLiveReloadServer();
-	if(server!=null) {
-		LiveReloadServerBehaviour b = (LiveReloadServerBehaviour)WSTUtils.findServerBehaviour(server);
-		LiveReloadServer lrServer = b.getLiveReloadServer();
-        StringBuffer command = new StringBuffer("ORG_JBOSS_TOOLS_JST.getProposals('");
-        String[] tags = query.getParentTags();
-        for (String tag : tags) {
-			command.append(tag).append('>');
-		}
-        command.deleteCharAt(command.length()-1).append("', '").append(newValue).append("')");
-System.out.println("Command: " + command.toString());
-		Iterator<ContentAssistWebSocket> webSocketsIterator = lrServer.webSockets.iterator();
-		if (webSocketsIterator.hasNext()) {
-			ContentAssistWebSocket webSocket = webSocketsIterator.next(); // use only the first one
-			try {
-				long start = System.nanoTime();
-				String result = webSocket.evaluate(command.toString(), 100);
-				long stop = System.nanoTime();
-System.out.format("%s [computed in %.3fms]%n", result, (stop - start) / 1e6);
-				StringTokenizer st = new StringTokenizer(result, ", ", false);
-				int dotIndex = newValue.indexOf('.');
-				StringBuilder prefix = new StringBuilder(qValue.substring(0, startEl+2));
-				if(dotIndex>-1) {
-					prefix.append(qValue.substring(startEl+2, startEl+dotIndex+3));
-				}
-				while(st.hasMoreElements()) {
-					String label = st.nextToken().trim();
-					TextProposal proposal = new TextProposal();
-					proposal.setLabel(label);
-					proposal.setReplacementString(prefix.toString() + label + "}}");
-					proposal.setImageDescriptor(WebKbPlugin.getImageDescriptor(WebKbPlugin.class, "EnumerationProposal.gif"));
-					proposals.add(proposal);
-				}
-			} catch (Exception e) {
-				e.printStackTrace();
-			}
-		} else {
-			System.out.println("No clients connected.");
-		}
-	}
+try {
+	proposals.addAll(getJSProposals(query));
+} catch (Exception e) {
+	e.printStackTrace();
 }
 
 		if (!isQueryForELProposals(query, context)) {
