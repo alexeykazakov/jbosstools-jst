@@ -11,6 +11,7 @@
 	<name>jbosstools-jst</name>
 	<version>3.8.2-SNAPSHOT</version>
 	<packaging>pom</packaging>
+	<!-- test -->
 	<properties>
 		<tycho.scmUrl>scm:git:https://github.com/jbosstools/jbosstools-jst.git</tycho.scmUrl>
 		<tern.reqs.url>http://download.jboss.org/jbosstools/updates/requirements/tern</tern.reqs.url>
